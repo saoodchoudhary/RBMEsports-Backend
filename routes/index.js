@@ -8,12 +8,25 @@ const paymentRoutes = require('./payment.routes');
 const teamRoutes = require('./team.routes');
 const adminRoutes = require('./admin.routes');
 
+// NEW
+const couponRoutes = require('./coupon.routes');
+const tournamentRoomRoutes = require("./tournament.room.routes");
+const matchResultRoutes = require("./matchResult.routes");
+const winnerRoutes = require("./winner.routes");
+
 // Route groups
 router.use('/auth', authRoutes);
 router.use('/tournaments', tournamentRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/teams', teamRoutes);
 router.use('/admin', adminRoutes);
+
+// NEW
+router.use('/coupons', couponRoutes);
+router.use("/tournaments", tournamentRoomRoutes);
+router.use("/", matchResultRoutes);
+router.use("/", winnerRoutes);
+
 
 // Health check
 router.get('/health', (req, res) => {
@@ -36,7 +49,8 @@ router.get('/', (req, res) => {
       tournaments: '/api/tournaments',
       payments: '/api/payments',
       teams: '/api/teams',
-      admin: '/api/admin'
+      admin: '/api/admin',
+      coupons: '/api/coupons'
     },
     documentation: 'https://docs.rbm-esports.com'
   });

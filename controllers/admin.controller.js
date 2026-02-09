@@ -5,6 +5,16 @@ const WinnerProfile = require('../models/WinnerProfile');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 
+// NEW
+const Wallet = require("../models/Wallet");
+
+// helper: get or create wallet
+async function getOrCreateWallet(userId) {
+  let wallet = await Wallet.findOne({ userId });
+  if (!wallet) wallet = await Wallet.create({ userId });
+  return wallet;
+}
+
 // @desc    Create tournament
 // @route   POST /api/admin/tournaments
 // @access  Private/Admin
@@ -32,19 +42,29 @@ exports.createTournament = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateTournament = async (req, res, next) => {
   try {
+    const { id } = req.params;
+
+    // ✅ guard invalid id
+    if (!id || id === "undefined") {
+      return res.status(400).json({
+        success: false,
+        message: "Tournament id is required"
+      });
+    }
+
     const tournament = await Tournament.findByIdAndUpdate(
-      req.params.id,
+      id,
       req.body,
       { new: true, runValidators: true }
     );
-    
+
     if (!tournament) {
       return res.status(404).json({
         success: false,
         message: 'Tournament not found'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       message: 'Tournament updated successfully',
@@ -170,25 +190,20 @@ exports.submitMatchResult = async (req, res, next) => {
   }
 };
 
-// @desc    Declare winners
-// @route   POST /api/admin/tournaments/:id/winners
-// @access  Private/Admin
+
+// @desc Declare winners
 exports.declareWinners = async (req, res, next) => {
   try {
     const { winners } = req.body; // [{ userId/teamId, rank, prizeAmount }, ...]
-    
+
     const tournament = await Tournament.findById(req.params.id);
-    
     if (!tournament) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tournament not found'
-      });
+      return res.status(404).json({ success: false, message: 'Tournament not found' });
     }
-    
+
     // Clear existing winners
     tournament.winners = [];
-    
+
     // Add new winners
     for (const winner of winners) {
       tournament.winners.push({
@@ -196,9 +211,9 @@ exports.declareWinners = async (req, res, next) => {
         teamId: winner.teamId,
         rank: winner.rank,
         prizeAmount: winner.prizeAmount,
-        isPaid: false
+        isPaid: true // IMPORTANT: since we are crediting wallet now
       });
-      
+
       // Create winner profile
       await WinnerProfile.create({
         tournamentId: tournament._id,
@@ -209,10 +224,31 @@ exports.declareWinners = async (req, res, next) => {
         totalKills: winner.totalKills || 0,
         totalPoints: winner.totalPoints || 0,
         approvedBy: req.user.id,
-        approvedAt: new Date()
+        approvedAt: new Date(),
+        paymentStatus: "paid",
+        paidAt: new Date()
       });
-      
-      // Update user stats
+
+      // Determine payout receiver
+      let receiverUserId = winner.userId;
+
+      // If squad: credit captain (from TournamentTeam)
+      if (tournament.tournamentType === "squad" && winner.teamId) {
+        const team = await TournamentTeam.findById(winner.teamId).select("captain");
+        if (team?.captain?.userId) receiverUserId = team.captain.userId;
+      }
+
+      if (receiverUserId) {
+        const wallet = await getOrCreateWallet(receiverUserId);
+        await wallet.addMoney(
+          Number(winner.prizeAmount),
+          "prize_won",
+          `Prize won: ${tournament.title} (Rank #${winner.rank})`,
+          { tournamentId: tournament._id }
+        );
+      }
+
+      // Update user stats (optional: keep your existing logic)
       if (winner.userId) {
         await User.findByIdAndUpdate(winner.userId, {
           $inc: {
@@ -230,15 +266,11 @@ exports.declareWinners = async (req, res, next) => {
         });
       }
     }
-    
+
     tournament.status = 'completed';
     await tournament.save();
-    
-    res.status(200).json({
-      success: true,
-      message: 'Winners declared successfully',
-      data: tournament
-    });
+
+    res.status(200).json({ success: true, message: 'Winners declared successfully', data: tournament });
   } catch (error) {
     next(error);
   }

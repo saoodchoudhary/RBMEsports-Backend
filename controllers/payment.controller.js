@@ -4,6 +4,9 @@ const TournamentTeam = require('../models/TournamentTeam');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
+// NEW
+const { markCouponUsed } = require("../utils/coupon.utils");
+
 // Initialize Razorpay
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -16,23 +19,31 @@ const razorpay = new Razorpay({
 exports.createOrder = async (req, res, next) => {
   try {
     const { paymentId } = req.body;
-    
+
     const payment = await Payment.findById(paymentId);
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
-    
+
     if (payment.userId.toString() !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized'
       });
     }
-    
+
+    // NEW: do not create Razorpay order for ₹0 payments
+    if ((payment.amount || 0) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0 for Razorpay order'
+      });
+    }
+
     // Create Razorpay order
     const options = {
       amount: payment.amount * 100, // amount in paise
@@ -44,14 +55,14 @@ exports.createOrder = async (req, res, next) => {
         userId: payment.userId.toString()
       }
     };
-    
+
     const order = await razorpay.orders.create(options);
-    
+
     // Update payment with order details
     payment.gatewayOrderId = order.id;
     payment.paymentStatus = 'processing';
     await payment.save();
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -78,40 +89,57 @@ exports.verifyPayment = async (req, res, next) => {
       razorpay_signature,
       paymentId
     } = req.body;
-    
+
     // Verify signature
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(sign.toString())
       .digest('hex');
-    
+
     if (razorpay_signature !== expectedSign) {
       return res.status(400).json({
         success: false,
         message: 'Invalid payment signature'
       });
     }
-    
+
     // Update payment
     const payment = await Payment.findById(paymentId);
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
-    
+
+    // Security: ensure user owns payment (or admin)
+    if (payment.userId.toString() !== req.user.id && req.user.role !== "admin" && req.user.role !== "super_admin") {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
+    // If already success, just return (idempotent)
+    if (payment.paymentStatus === "success") {
+      return res.status(200).json({
+        success: true,
+        message: 'Payment already verified',
+        data: payment
+      });
+    }
+
     payment.gatewayPaymentId = razorpay_payment_id;
     payment.gatewaySignature = razorpay_signature;
     payment.paymentStatus = 'success';
     payment.completedAt = new Date();
     await payment.save();
-    
+
     // Update tournament registration status
     const tournament = await Tournament.findById(payment.tournamentId);
-    
+
     if (payment.paymentType === 'team') {
       await TournamentTeam.findByIdAndUpdate(payment.teamId, {
         paymentStatus: 'paid'
@@ -120,13 +148,18 @@ exports.verifyPayment = async (req, res, next) => {
       const participantIndex = tournament.participants.findIndex(
         p => p.userId.toString() === payment.userId.toString()
       );
-      
+
       if (participantIndex !== -1) {
         tournament.participants[participantIndex].paymentStatus = 'paid';
         await tournament.save();
       }
     }
-    
+
+    // NEW: mark coupon used only after successful payment (payable > 0 case)
+    if (payment.couponId) {
+      await markCouponUsed({ couponId: payment.couponId, userId: payment.userId });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Payment verified successfully',
@@ -145,14 +178,14 @@ exports.getPayment = async (req, res, next) => {
     const payment = await Payment.findById(req.params.id)
       .populate('userId', 'name email')
       .populate('tournamentId', 'title tournamentType');
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
-    
+
     // Check authorization
     if (payment.userId._id.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({
@@ -160,7 +193,7 @@ exports.getPayment = async (req, res, next) => {
         message: 'Not authorized'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       data: payment
@@ -178,7 +211,7 @@ exports.getMyPayments = async (req, res, next) => {
     const payments = await Payment.find({ userId: req.user.id })
       .populate('tournamentId', 'title tournamentType tournamentStartDate')
       .sort({ createdAt: -1 });
-    
+
     res.status(200).json({
       success: true,
       count: payments.length,
@@ -195,25 +228,25 @@ exports.getMyPayments = async (req, res, next) => {
 exports.processRefund = async (req, res, next) => {
   try {
     const { reason, amount } = req.body;
-    
+
     const payment = await Payment.findById(req.params.id);
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
-    
+
     if (payment.paymentStatus !== 'success') {
       return res.status(400).json({
         success: false,
         message: 'Can only refund successful payments'
       });
     }
-    
+
     const refundAmount = amount || payment.amount;
-    
+
     // Create Razorpay refund
     const refund = await razorpay.payments.refund(payment.gatewayPaymentId, {
       amount: refundAmount * 100,
@@ -221,7 +254,7 @@ exports.processRefund = async (req, res, next) => {
         reason: reason || 'Refund requested by admin'
       }
     });
-    
+
     // Update payment
     payment.refunds.push({
       refundId: refund.id,
@@ -232,15 +265,15 @@ exports.processRefund = async (req, res, next) => {
       gatewayRefundId: refund.id,
       processedAt: new Date()
     });
-    
+
     if (payment.totalRefunded >= payment.amount) {
       payment.paymentStatus = 'refunded';
     } else {
       payment.paymentStatus = 'partially_refunded';
     }
-    
+
     await payment.save();
-    
+
     res.status(200).json({
       success: true,
       message: 'Refund processed successfully',

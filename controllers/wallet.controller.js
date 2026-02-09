@@ -5,6 +5,9 @@ const TournamentTeam = require('../models/TournamentTeam');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
+// NEW
+const { markCouponUsed } = require("../utils/coupon.utils");
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
@@ -16,11 +19,11 @@ const razorpay = new Razorpay({
 exports.getWallet = async (req, res, next) => {
   try {
     let wallet = await Wallet.findOne({ userId: req.user.id });
-    
+
     if (!wallet) {
       wallet = await Wallet.create({ userId: req.user.id });
     }
-    
+
     res.status(200).json({
       success: true,
       data: wallet
@@ -36,14 +39,14 @@ exports.getWallet = async (req, res, next) => {
 exports.createAddMoneyOrder = async (req, res, next) => {
   try {
     const { amount } = req.body;
-    
+
     if (!amount || amount < 10) {
       return res.status(400).json({
         success: false,
         message: 'Minimum amount is ₹10'
       });
     }
-    
+
     const options = {
       amount: amount * 100,
       currency: 'INR',
@@ -53,9 +56,9 @@ exports.createAddMoneyOrder = async (req, res, next) => {
         type: 'wallet_deposit'
       }
     };
-    
+
     const order = await razorpay.orders.create(options);
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -80,30 +83,30 @@ exports.verifyAndAddMoney = async (req, res, next) => {
       razorpay_signature,
       amount
     } = req.body;
-    
+
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(sign.toString())
       .digest('hex');
-    
+
     if (razorpay_signature !== expectedSign) {
       return res.status(400).json({
         success: false,
         message: 'Invalid payment signature'
       });
     }
-    
+
     let wallet = await Wallet.findOne({ userId: req.user.id });
     if (!wallet) {
       wallet = await Wallet.create({ userId: req.user.id });
     }
-    
+
     await wallet.addMoney(amount, 'deposit', 'Money added to wallet', {
       razorpayOrderId: razorpay_order_id,
       razorpayPaymentId: razorpay_payment_id
     });
-    
+
     res.status(200).json({
       success: true,
       message: 'Money added successfully',
@@ -120,57 +123,84 @@ exports.verifyAndAddMoney = async (req, res, next) => {
 exports.payTournamentWithWallet = async (req, res, next) => {
   try {
     const { tournamentId, amount, paymentId } = req.body;
-    
+
     let wallet = await Wallet.findOne({ userId: req.user.id });
-    
+
     if (!wallet || wallet.balance < amount) {
       return res.status(400).json({
         success: false,
         message: 'Insufficient wallet balance'
       });
     }
-    
+
     const tournament = await Tournament.findById(tournamentId);
-    
+
     if (!tournament) {
       return res.status(404).json({
         success: false,
         message: 'Tournament not found'
       });
     }
-    
-    // Deduct from wallet
-    await wallet.deductMoney(
-      amount, 
-      'tournament_fee', 
-      `Tournament registration: ${tournament.title}`,
-      { tournamentId }
-    );
-    
+
     // Update payment status
     const payment = await Payment.findById(paymentId);
-    if (payment) {
-      payment.paymentStatus = 'success';
-      payment.paymentMethod = { type: 'wallet' };
-      payment.completedAt = new Date();
-      await payment.save();
-      
-      // Update tournament participant payment status
-      if (payment.paymentType === 'team') {
-        await TournamentTeam.findByIdAndUpdate(payment.teamId, {
-          paymentStatus: 'paid'
-        });
-      } else {
-        const participantIndex = tournament.participants.findIndex(
-          p => p.userId.toString() === req.user.id
-        );
-        if (participantIndex !== -1) {
-          tournament.participants[participantIndex].paymentStatus = 'paid';
-          await tournament.save();
-        }
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found'
+      });
+    }
+
+    // Security: payment belongs to user
+    if (payment.userId.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
+    // OPTIONAL: ensure amount matches payable (prevents tampering)
+    if (typeof amount === "number" && payment.amount !== amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount mismatch'
+      });
+    }
+
+    // Deduct from wallet
+    await wallet.deductMoney(
+      amount,
+      'tournament_fee',
+      `Tournament registration: ${tournament.title}`,
+      { tournamentId, paymentId: payment._id }
+    );
+
+    // Mark payment success
+    payment.paymentStatus = 'success';
+    payment.paymentMethod = { type: 'wallet' };
+    payment.completedAt = new Date();
+    await payment.save();
+
+    // Update tournament participant payment status
+    if (payment.paymentType === 'team') {
+      await TournamentTeam.findByIdAndUpdate(payment.teamId, {
+        paymentStatus: 'paid'
+      });
+    } else {
+      const participantIndex = tournament.participants.findIndex(
+        p => p.userId.toString() === req.user.id
+      );
+      if (participantIndex !== -1) {
+        tournament.participants[participantIndex].paymentStatus = 'paid';
+        await tournament.save();
       }
     }
-    
+
+    // NEW: mark coupon used after wallet success, if coupon exists
+    if (payment.couponId) {
+      await markCouponUsed({ couponId: payment.couponId, userId: payment.userId });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Tournament fee paid successfully',
@@ -190,32 +220,32 @@ exports.payTournamentWithWallet = async (req, res, next) => {
 exports.requestWithdrawal = async (req, res, next) => {
   try {
     const { amount, method, accountDetails } = req.body;
-    
+
     if (!amount || amount < 100) {
       return res.status(400).json({
         success: false,
         message: 'Minimum withdrawal amount is ₹100'
       });
     }
-    
+
     if (!method || !accountDetails) {
       return res.status(400).json({
         success: false,
         message: 'Please provide withdrawal method and account details'
       });
     }
-    
+
     const wallet = await Wallet.findOne({ userId: req.user.id });
-    
+
     if (!wallet) {
       return res.status(404).json({
         success: false,
         message: 'Wallet not found'
       });
     }
-    
+
     await wallet.requestWithdrawal(amount, method, accountDetails);
-    
+
     res.status(200).json({
       success: true,
       message: 'Withdrawal request submitted. Will be processed within 24-48 hours',
@@ -235,14 +265,14 @@ exports.requestWithdrawal = async (req, res, next) => {
 exports.getWithdrawals = async (req, res, next) => {
   try {
     const wallet = await Wallet.findOne({ userId: req.user.id });
-    
+
     if (!wallet) {
       return res.status(404).json({
         success: false,
         message: 'Wallet not found'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       data: wallet.pendingWithdrawals
@@ -258,13 +288,13 @@ exports.getWithdrawals = async (req, res, next) => {
 exports.updateWithdrawalInfo = async (req, res, next) => {
   try {
     const { method, accountHolderName, accountNumber, ifscCode, bankName, upiId } = req.body;
-    
+
     let wallet = await Wallet.findOne({ userId: req.user.id });
-    
+
     if (!wallet) {
       wallet = await Wallet.create({ userId: req.user.id });
     }
-    
+
     wallet.withdrawalInfo = {
       method,
       accountHolderName,
@@ -273,9 +303,9 @@ exports.updateWithdrawalInfo = async (req, res, next) => {
       bankName,
       upiId
     };
-    
+
     await wallet.save();
-    
+
     res.status(200).json({
       success: true,
       message: 'Withdrawal info updated',

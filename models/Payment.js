@@ -28,13 +28,22 @@ const PaymentSchema = new mongoose.Schema(
       inGameName: { type: String },
       isCaptain: { type: Boolean, default: false }
     }],
+
+    // Amounts
     amount: { type: Number, required: true, min: 0 },
     currency: { type: String, default: "INR", enum: ["INR", "USD", "EUR"] },
-    baseAmount: { type: Number },
+
+    // NEW: coupon breakdown (optional)
+    baseAmount: { type: Number }, // e.g. tournament.serviceFee
+    discountAmount: { type: Number, default: 0, min: 0 },
+    couponCode: { type: String, trim: true, uppercase: true },
+    couponId: { type: mongoose.Schema.Types.ObjectId, ref: "Coupon" },
+
     taxAmount: { type: Number, default: 0 },
     gatewayFee: { type: Number, default: 0 },
     platformFee: { type: Number, default: 0 },
     netAmount: { type: Number },
+
     paymentStatus: { 
       type: String, 
       enum: [
@@ -51,33 +60,39 @@ const PaymentSchema = new mongoose.Schema(
       default: "pending",
       index: true 
     },
+
     paymentGateway: { 
       type: String, 
       enum: ["razorpay", "paytm", "cashfree", "stripe", "paypal", "manual", "bank_transfer"], 
       required: true,
       index: true 
     },
+
     gatewayOrderId: { type: String },
     gatewayPaymentId: { type: String },
     gatewaySignature: { type: String },
+
     transactionId: { type: String },
     invoiceId: { type: String },
     referenceId: { type: String },
+
     paymentMethod: { 
-      type: { type: String, enum: ["card", "netbanking", "upi", "wallet", "emi", "bank_transfer", "cash"] },
-      lastFour: String,
+       type: { type: String, enum: ["card","netbanking","upi","wallet","emi","bank_transfer","cash","coupon"] },
+  lastFour: String,
       bank: String,
       wallet: String,
       upiId: String,
       cardType: { type: String, enum: ["credit", "debit"] },
       issuer: String
     },
+
     initiatedAt: { type: Date, default: Date.now, index: true },
     processingAt: { type: Date },
     completedAt: { type: Date },
     failedAt: { type: Date },
     refundedAt: { type: Date },
     cancelledAt: { type: Date },
+
     customerDetails: {
       name: String,
       email: String,
@@ -85,6 +100,7 @@ const PaymentSchema = new mongoose.Schema(
       bgmiId: String,
       inGameName: String
     },
+
     billingDetails: {
       name: String,
       email: String,
@@ -99,10 +115,12 @@ const PaymentSchema = new mongoose.Schema(
       },
       taxId: String
     },
+
     description: { type: String },
     notes: { type: String },
     internalNotes: { type: String },
     metadata: { type: mongoose.Schema.Types.Mixed },
+
     refunds: [{
       refundId: { type: String, required: true },
       amount: { type: Number, required: true },
@@ -113,6 +131,7 @@ const PaymentSchema = new mongoose.Schema(
       processedAt: Date,
       notes: String
     }],
+
     payoutDetails: {
       payoutMethod: { type: String, enum: ["bank", "upi", "wallet"] },
       payoutId: String,
@@ -122,21 +141,26 @@ const PaymentSchema = new mongoose.Schema(
       taxDeducted: { type: Number, default: 0 },
       tdsPercentage: { type: Number, default: 0 }
     },
+
     webhookData: { type: mongoose.Schema.Types.Mixed },
     callbackUrl: String,
     webhookStatus: { type: String, enum: ["pending", "received", "processed", "failed"] },
     ipAddress: String,
     userAgent: String,
     deviceId: String,
+
     isVerified: { type: Boolean, default: false },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     verifiedAt: { type: Date },
+
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
     isTestPayment: { type: Boolean, default: false },
     isAutoRefund: { type: Boolean, default: false },
     requiresManualReview: { type: Boolean, default: false },
     isSuspicious: { type: Boolean, default: false },
+
     version: { type: Number, default: 1 },
     isDeleted: { type: Boolean, default: false }
   },
@@ -176,20 +200,20 @@ PaymentSchema.pre("save", function() {
     const prefix = this.paymentType === "prize_payout" ? "POUT" : "INV";
     this.invoiceId = `${prefix}-${timestamp}${random}`;
   }
-  
+
   // Generate transaction ID
   if (!this.transactionId && this.paymentStatus === "success") {
     const timestamp = Date.now().toString().slice(-10);
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     this.transactionId = `TXN${timestamp}${random}`;
   }
-  
+
   // Calculate net amount
   if (this.isModified('amount') || this.isModified('taxAmount') || 
       this.isModified('gatewayFee') || this.isModified('platformFee')) {
     this.netAmount = this.amount - (this.taxAmount || 0) - (this.gatewayFee || 0) - (this.platformFee || 0);
   }
-  
+
   // Update timestamps based on status
   if (this.isModified('paymentStatus')) {
     const now = new Date();
@@ -226,5 +250,8 @@ PaymentSchema.index({ paymentType: 1, paymentStatus: 1 });
 PaymentSchema.index({ teamId: 1 });
 PaymentSchema.index({ completedAt: 1 });
 PaymentSchema.index({ createdBy: 1 });
+
+// NEW helpful index
+PaymentSchema.index({ couponCode: 1 });
 
 module.exports = mongoose.model("Payment", PaymentSchema);
