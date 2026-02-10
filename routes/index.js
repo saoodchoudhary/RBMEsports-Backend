@@ -21,6 +21,10 @@ router.use('/payments', paymentRoutes);
 router.use('/teams', teamRoutes);
 router.use('/admin', adminRoutes);
 
+
+// Wallet routes (add this line)
+router.use('/wallet', require('./wallet.routes'));
+
 // NEW
 router.use('/coupons', couponRoutes);
 router.use("/tournaments", tournamentRoomRoutes);

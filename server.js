@@ -43,8 +43,6 @@ mongoose.connect(process.env.MONGODB_URI)
 // Routes
 app.use('/api', require('./routes/index'));
 
-// Wallet routes (add this line)
-app.use('/api/wallet', require('./routes/wallet.routes'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
