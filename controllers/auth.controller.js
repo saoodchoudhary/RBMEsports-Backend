@@ -14,12 +14,12 @@ const generateToken = (id) => {
 const sendTokenResponse = (user, statusCode, res) => {
   const token = generateToken(user._id);
   
-  const options = {
-    expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
-  };
+ const options = {
+  expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production", // must be true on HTTPS
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax"
+};
   
   res
     .status(statusCode)
