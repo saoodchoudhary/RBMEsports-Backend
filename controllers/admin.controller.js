@@ -319,23 +319,23 @@ exports.getParticipants = async (req, res, next) => {
 exports.verifyPayment = async (req, res, next) => {
   try {
     const payment = await Payment.findById(req.params.id);
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
-    
+
     payment.paymentStatus = 'success';
     payment.isVerified = true;
     payment.verifiedBy = req.user.id;
     payment.verifiedAt = new Date();
     await payment.save();
-    
+
     // Update tournament participant status
     const tournament = await Tournament.findById(payment.tournamentId);
-    
+
     if (payment.paymentType === 'team') {
       await TournamentTeam.findByIdAndUpdate(payment.teamId, {
         paymentStatus: 'paid'
@@ -349,10 +349,81 @@ exports.verifyPayment = async (req, res, next) => {
         await tournament.save();
       }
     }
-    
+
     res.status(200).json({
       success: true,
       message: 'Payment verified successfully',
+      data: payment
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ NEW
+// @desc    Reject manual payment and free slot
+// @route   PUT /api/admin/payments/:id/reject
+// @access  Private/Admin
+exports.rejectPayment = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+
+    const payment = await Payment.findById(req.params.id);
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+
+    payment.paymentStatus = "failed";
+    payment.isVerified = false;
+    payment.failedAt = new Date();
+    payment.internalNotes = `Rejected by admin ${req.user.id}${reason ? `: ${String(reason).trim()}` : ""}`;
+
+    payment.metadata = {
+      ...(payment.metadata || {}),
+      rejection: {
+        reason: reason ? String(reason).trim() : "",
+        rejectedBy: req.user.id,
+        rejectedAt: new Date().toISOString()
+      }
+    };
+
+    await payment.save();
+
+    const tournament = await Tournament.findById(payment.tournamentId);
+    if (!tournament) {
+      return res.status(200).json({
+        success: true,
+        message: "Payment rejected (tournament not found to free slot).",
+        data: payment
+      });
+    }
+
+    if (payment.paymentType === "team" && payment.teamId) {
+      // delete team => frees slot
+      await TournamentTeam.findByIdAndDelete(payment.teamId);
+
+      // best-effort count update (team counts are stored as +1 in your registerSquad)
+      if (typeof tournament.currentParticipants === "number") {
+        tournament.currentParticipants = Math.max(0, tournament.currentParticipants - 1);
+      }
+      await tournament.save();
+    } else {
+      // remove participant
+      const before = tournament.participants.length;
+      tournament.participants = tournament.participants.filter(
+        (p) => p.userId.toString() !== payment.userId.toString()
+      );
+
+      const removed = before - tournament.participants.length;
+      if (typeof tournament.currentParticipants === "number") {
+        tournament.currentParticipants = Math.max(0, tournament.currentParticipants - removed);
+      }
+      await tournament.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment rejected and slot freed",
       data: payment
     });
   } catch (error) {

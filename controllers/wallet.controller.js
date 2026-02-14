@@ -8,6 +8,10 @@ const crypto = require("crypto");
 // NEW
 const { markCouponUsed } = require("../utils/coupon.utils");
 
+// ✅ FEATURE FLAG: disable wallet topups (add money)
+const WALLET_TOPUP_DISABLED =
+  String(process.env.WALLET_TOPUP_DISABLED ?? "true").toLowerCase() === "true";
+
 // ---- Razorpay init (hardened) ----
 function getRazorpay() {
   const key_id = process.env.RAZORPAY_KEY_ID;
@@ -68,6 +72,14 @@ exports.getWallet = async (req, res, next) => {
 // @access  Private
 exports.createAddMoneyOrder = async (req, res, next) => {
   try {
+    // ✅ DISABLE TOPUP AT BACKEND
+    if (WALLET_TOPUP_DISABLED) {
+      return res.status(403).json({
+        success: false,
+        message: "Wallet top-up is currently disabled"
+      });
+    }
+
     const { amount } = req.body;
 
     const amt = Number(amount);
@@ -129,6 +141,14 @@ exports.createAddMoneyOrder = async (req, res, next) => {
 // @access  Private
 exports.verifyAndAddMoney = async (req, res, next) => {
   try {
+    // ✅ DISABLE TOPUP AT BACKEND
+    if (WALLET_TOPUP_DISABLED) {
+      return res.status(403).json({
+        success: false,
+        message: "Wallet top-up is currently disabled"
+      });
+    }
+
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount } = req.body;
 
     const key_secret = process.env.RAZORPAY_KEY_SECRET;

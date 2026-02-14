@@ -203,6 +203,56 @@ exports.verifyPayment = async (req, res, next) => {
   }
 };
 
+// @desc    Submit manual payment proof (UPI)
+// @route   POST /api/payments/:id/manual-proof
+// @access  Private
+exports.submitManualProof = async (req, res, next) => {
+  try {
+    const paymentId = req.params.id;
+    const { utr, notes } = req.body;
+
+    const payment = await Payment.findById(paymentId);
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+
+    if (payment.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    if ((payment.amount || 0) <= 0) {
+      return res.status(400).json({ success: false, message: "Manual proof is not required for ₹0 payments" });
+    }
+
+    if (!utr || String(utr).trim().length < 6) {
+      return res.status(400).json({ success: false, message: "UTR / Transaction ID is required" });
+    }
+
+    payment.paymentGateway = "manual";
+    payment.paymentStatus = "on_hold";
+    payment.referenceId = String(utr).trim();
+    payment.requiresManualReview = true;
+
+    payment.metadata = {
+      ...(payment.metadata || {}),
+      manualProof: {
+        utr: String(utr).trim(),
+        notes: notes ? String(notes).trim() : "",
+        submittedAt: new Date().toISOString()
+      }
+    };
+
+    await payment.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment proof submitted. Pending admin review.",
+      data: payment
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 // @desc    Get payment details
 // @route   GET /api/payments/:id
 // @access  Private
