@@ -1,5 +1,6 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
+
 const {
   getAllTournaments,
   getTournament,
@@ -7,20 +8,25 @@ const {
   registerSquad,
   getLeaderboard,
   getTournamentParticipants
-} = require('../controllers/tournament.controller');
-const { protect, optionalAuth } = require('../middleware/auth.middleware');
+} = require("../controllers/tournament.controller");
 
-// NEW
+const { protect, optionalAuth } = require("../middleware/auth.middleware");
 const { blockBanned } = require("../middleware/ban.middleware");
 
+// ✅ NEW
+const { getMyTournamentRegistration } = require("../controllers/tournament.me.controller");
+
 // Public routes
-router.get('/', optionalAuth, getAllTournaments);
-router.get('/:id', optionalAuth, getTournament);
-router.get('/:id/leaderboard', getLeaderboard);
-router.get('/:id/participants', getTournamentParticipants);
+router.get("/", optionalAuth, getAllTournaments);
+router.get("/:id", optionalAuth, getTournament);
+router.get("/:id/leaderboard", getLeaderboard);
+router.get("/:id/participants", getTournamentParticipants);
+
+// ✅ NEW (Protected): my registration status + paymentId
+router.get("/:id/my-registration", protect, getMyTournamentRegistration);
 
 // Protected routes
-router.post('/:id/register', protect, blockBanned, registerForTournament);
-router.post('/:id/register-squad', protect, blockBanned, registerSquad);
+router.post("/:id/register", protect, blockBanned, registerForTournament);
+router.post("/:id/register-squad", protect, blockBanned, registerSquad);
 
 module.exports = router;
